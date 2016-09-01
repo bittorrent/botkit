@@ -69,7 +69,12 @@ if (!process.env.token) {
     process.exit(1);
 }
 
-var Botkit = require('./lib/Botkit.js');
+var Botkit = require('./lib/Botkit.js'),
+    users = {},
+    channels = {},
+    // channelId = 'C272BLDG9' //test
+    channelId = "C2740F8TC"//pool
+;
 var os = require('os');
 
 var controller = Botkit.slackbot({
@@ -81,6 +86,133 @@ var bot = controller.spawn({
 }).startRTM();
 
 
+var request = require('request');
+
+function request (uri, options, callback) {
+  if (typeof uri === 'undefined') {
+    throw new Error('undefined is not a valid uri or options object.')
+  }
+
+  var params = initParams(uri, options, callback)
+
+  if (params.method === 'HEAD' && paramsHaveRequestBody(params)) {
+    throw new Error('HTTP HEAD requests MUST NOT include a request body.')
+  }
+
+  return new request.Request(params)
+}
+
+//grab all users
+request({url:'https://slack.com/api/users.list',
+          qs:{
+            token:process.env.token,
+            presence:1
+          }}, function (error, response, body) {
+    if (!error && response.statusCode == 200) {
+        body = JSON.parse(body);
+        if(body.ok){
+          users = body.members;
+          loadChannels(function () {
+            console.log('.loadChannels ok')
+          });
+        }
+    }
+});
+function postMessage(message){
+  request({url:'https://slack.com/api/chat.postMessage',
+            qs:{
+              token:process.env.token,
+              channel:channelId,
+              text: message,
+              link_names:1,
+              unfurl_media:true,
+              as_user:true
+            }}, function (error, response, body) {
+      if (!error && response.statusCode == 200) {
+         console.log("message posted : " + message);
+      }
+  });
+}
+
+function loadChannels (callback) {
+  //grab existing channels
+  request({url:'https://slack.com/api/channels.list',
+            qs:{
+              token:process.env.token
+            }}, function (error, response, body) {
+      if (!error && response.statusCode == 200) {
+          body = JSON.parse(body);
+          if(body.ok){
+            channels = body.channels;
+            callback();
+          }
+      }
+  });
+}
+function random(from,to){
+    return Math.floor((Math.random() * (to+1-from)) + from);
+}
+function pickRandomActiveUser(excludeUserId) {
+  var limit = 100,
+      user,
+      tempUser,
+      tempUserId,
+      channel = getChannel(channelId);
+    console.log("Channel Members " + channel.members);
+  while(limit > 0){
+    limit--;
+    tempUserId = channel.members[random(0,channel.members.length-1)];
+    if (tempUserId==excludeUserId) {
+        continue
+    }
+    tempUser = getUser(tempUserId);
+//acn
+    // if(tempUser.presence != 'active' ) {
+    if(tempUser.presence != 'active' || tempUser.is_bot){
+        continue
+    }
+    console.log(".chosen ID " + tempUserId);
+    console.log(".chosen User " + tempUser.name);
+    user = tempUser;
+    break
+  }
+  return user;
+}
+function getChannel(channelId) {
+  for (var i = channels.length - 1; i >= 0; i--) {
+    if(channels[i].id == channelId){
+      return channels[i];
+    }
+  };
+}
+function getUser(userId) {
+  for (var i = users.length - 1; i >= 0; i--) {
+    if(users[i].id == userId){
+      return users[i];
+    }
+  };
+}
+function lineUp(userId) {
+  var user = pickRandomActiveUser(userId)
+  var activityText
+  if (user) {
+      activityText = "@" + user.name + " is the next random opponent for @" + getUser(userId).name;
+  }
+  else {
+      activityText = "Sorry, no other players are online at this time";
+  }
+    postMessage(activityText);
+}
+
+controller.hears(['lineup'],['ambient,direct_message,direct_mention,mention'],function(bot,message) {
+    console.log('.lineup')
+    if (message.user) {
+        lineUp(message.user)
+    }
+    else
+      bot.reply(message,'lineup error');
+
+});
 controller.hears(['hello', 'hi'], 'direct_message,direct_mention,mention', function(bot, message) {
 
     bot.api.reactions.add({
